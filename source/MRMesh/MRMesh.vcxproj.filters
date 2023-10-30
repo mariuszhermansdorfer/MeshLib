@@ -1083,6 +1083,18 @@
     <ClInclude Include="MRSolarRadiation.h">
       <Filter>Source Files\AABBTree</Filter>
     </ClInclude>
+    <ClInclude Include="MRImproveSampling.h">
+      <Filter>Source Files\PointCloud</Filter>
+    </ClInclude>
+    <ClInclude Include="MRChangeColoringActions.h">
+      <Filter>Source Files\History</Filter>
+    </ClInclude>
+    <ClInclude Include="MRCloudPartMapping.h">
+      <Filter>Source Files\PointCloud</Filter>
+    </ClInclude>
+    <ClInclude Include="MREnumNeighbours.h">
+      <Filter>Source Files\Mesh</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MRObject.cpp">
@@ -1804,6 +1816,12 @@
     </ClCompile>
     <ClCompile Include="MRSolarRadiation.cpp">
       <Filter>Source Files\AABBTree</Filter>
+    </ClCompile>
+    <ClCompile Include="MRImproveSampling.cpp">
+      <Filter>Source Files\PointCloud</Filter>
+    </ClCompile>
+    <ClCompile Include="MREnumNeighbours.cpp">
+      <Filter>Source Files\Mesh</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

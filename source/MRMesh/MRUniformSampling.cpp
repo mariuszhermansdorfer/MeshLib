@@ -4,110 +4,118 @@
 #include "MRVector.h"
 #include "MRTimer.h"
 #include "MRPointsInBall.h"
+#include "MRBox.h"
+#include "MRPointCloudMakeNormals.h"
+#include "MRPointCloudRadius.h"
 #include <cfloat>
 
 namespace MR
 {
 
-std::optional<VertBitSet> pointUniformSampling( const PointCloud& pointCloud, float distance, const ProgressCallback & cb )
+std::optional<VertBitSet> pointUniformSampling( const PointCloud& pointCloud, const UniformSamplingSettings & settings )
 {
     MR_TIMER
 
-    const auto sz = pointCloud.points.size();
-    const int reportStep = std::min( int( sz / 64 ), 1024 );
-    VertId reportNext = 0_v;
+    auto cb = settings.progress;
 
-    VertBitSet res = pointCloud.validPoints;
-    for ( auto v : res )
+    const VertNormals * pNormals = nullptr;
+    std::optional<VertNormals> optNormals;
+    if ( settings.minNormalDot > 0 )
     {
-        if ( cb && v >= reportNext )
+        if ( pointCloud.hasNormals() )
+            pNormals = &pointCloud.normals;
+        else
         {
-            if ( !cb( float( v ) / sz ) )
+            optNormals = makeUnorientedNormals( pointCloud, findAvgPointsRadius( pointCloud, 48 ), subprogress( cb, 0.0f, 0.3f ) );
+            if ( !optNormals )
                 return {};
-            reportNext = v + reportStep;
+            if ( !reportProgress( cb, 0.3f ) )
+                return {};
+            cb = subprogress( cb, 0.3f, 1.0f );
+            pNormals = &*optNormals;
         }
-
-        findPointsInBall( pointCloud, pointCloud.points[v], distance, [&]( VertId cv, const Vector3f& )
-        {
-            if ( cv > v )
-                res.reset( cv );
-        } );
     }
-    return res;
-}
-
-std::optional<VertBitSet> pointRegularUniformSampling( const PointCloud& pointCloud, float distance, const ProgressCallback& cb /*= {} */ )
-{
-    MR_TIMER
-
-    const auto sz = pointCloud.validPoints.count();
-    size_t progressCounter = 0;
-
-    auto rp = [&] ()->bool
-    {
-        if ( !cb )
-            return true;
-        ++progressCounter;
-        if ( bool( progressCounter & 0x3ff ) )
-            return true;
-        return cb( float( progressCounter ) / float( sz ) );
-    };
 
     VertBitSet visited( pointCloud.validPoints.size() );
     VertBitSet sampled( pointCloud.validPoints.size() );
-    for ( auto v : pointCloud.validPoints )
+
+    struct NearVert
+    {
+        VertId v;
+        float distSq = 0;
+    };
+    std::vector<NearVert> nearVerts;
+
+    auto processOne = [&]( VertId v )
     {
         if ( visited.test( v ) )
+            return;
+        sampled.set( v );
+        const auto c = pointCloud.points[v];
+        float localMaxDistSq = sqr( settings.distance );
+        findPointsInBall( pointCloud, c, settings.distance, [&] ( VertId u, const Vector3f& pu )
         {
-            if ( !rp() )
-                return {};
-            continue;
-        }
-        visited.set( v );
-
-        VertId nextVertId = v;
-
-        while ( nextVertId )
-        {
-            sampled.set( nextVertId );
-            const auto& nextVertPos = pointCloud.points[nextVertId];
-            nextVertId = {};
-            const auto maxDistSq = distance * distance;
-            float minDistSq = FLT_MAX;
-            findPointsInBall( pointCloud, nextVertPos, 2 * distance, [&] ( VertId cv, const Vector3f& pos )
+            const auto distSq = ( c - pu ).lengthSq();
+            if ( pNormals && std::abs( dot( (*pNormals)[v], (*pNormals)[u] ) ) < settings.minNormalDot )
             {
-                if ( nextVertId == cv || visited.test( cv ) )
-                    return;
-                auto distSq = ( nextVertPos - pos ).lengthSq();
-                if ( distSq < maxDistSq )
-                    visited.set( cv );
-                else if ( distSq < minDistSq )
-                {
-                    minDistSq = distSq;
-                    nextVertId = cv;
-                }
-            } );
-            if ( !rp() )
+                localMaxDistSq = std::min( localMaxDistSq, distSq );
+                return;
+            }
+            nearVerts.push_back( { u, distSq } );
+        } );
+        for ( const auto & [ u, distSq ] : nearVerts )
+        {
+            if ( distSq >= localMaxDistSq )
+                continue;
+            visited.set( u );
+        }
+        nearVerts.clear();
+    };
+
+    size_t progressCount = 0;
+    if ( settings.lexicographicalOrder )
+    {
+        std::vector<VertId> searchQueue = pointCloud.getLexicographicalOrder();
+        if ( !reportProgress( cb, 0.3f ) )
+            return {};
+        cb = subprogress( cb, 0.3f, 1.0f );
+        size_t totalCount = searchQueue.size();
+        for ( auto v : searchQueue )
+        {
+            if ( cb && !( ( ++progressCount ) & 0x3ff ) && !cb( float( progressCount ) / float( totalCount ) ) )
                 return {};
+            processOne( v );
         }
     }
+    else
+    {
+        size_t totalCount = pointCloud.validPoints.count();
+        for ( auto v : pointCloud.validPoints )
+        {
+            if ( cb && !( ( ++progressCount ) & 0x3ff ) && !cb( float( progressCount ) / float( totalCount ) ) )
+                return {};
+            processOne( v );
+        }
+    }
+
     return sampled;
 }
 
-std::optional<PointCloud> makeUniformSampledCloud( const PointCloud& pointCloud, float distance, 
-    const VertNormals * extNormals, const ProgressCallback & cb )
+std::optional<PointCloud> makeUniformSampledCloud( const PointCloud& pointCloud, const UniformSamplingSettings & settings )
 {
     MR_TIMER
 
     std::optional<PointCloud> res;
-    auto optVerts = pointUniformSampling( pointCloud, distance, subprogress( cb, 0.0f, 0.9f ) );
+    auto s = settings;
+    s.progress = subprogress( s.progress, 0.0f, 0.9f );
+    auto optVerts = pointUniformSampling( pointCloud, s );
     if ( !optVerts )
         return res;
 
     res.emplace();
-    res->addPartByMask( pointCloud, *optVerts, nullptr, extNormals );
+    res->addPartByMask( pointCloud, *optVerts );
 
-    if ( !reportProgress( cb, 1.0f ) )
+    if ( !reportProgress( settings.progress, 1.0f ) )
         res.reset();
     return res;
 }
